@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>辯論賽專用智慧計時器</title>
+    <style>
+        :root {
+            --bg-color: #121212;
+            --text-color: #ffffff;
+            --primary: #4CAF50;
+            --warning: #FF9800;
+            --danger: #F44336;
+        }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+            transition: background-color 0.3s;
+        }
+        h1 { margin-bottom: 5px; color: #aaa; font-weight: normal; }
+        .timer-display {
+            font-size: 12vw;
+            font-weight: bold;
+            font-variant-numeric: tabular-nums;
+            margin: 20px 0;
+            text-shadow: 0 0 20px rgba(255,255,255,0.1);
+            transition: color 0.3s;
+        }
+        .controls { display: flex; gap: 15px; margin-bottom: 30px; }
+        button {
+            font-size: 1.5rem;
+            padding: 12px 30px;
+            cursor: pointer;
+            border: none;
+            border-radius: 8px;
+            font-weight: bold;
+            transition: transform 0.1s, opacity 0.2s;
+        }
+        button:hover { opacity: 0.8; }
+        button:active { transform: scale(0.95); }
+        .btn-start { background-color: var(--primary); color: white; }
+        .btn-pause { background-color: var(--warning); color: #000; }
+        .btn-reset { background-color: #555; color: white; }
+        .settings {
+            background: #1e1e1e;
+            padding: 20px;
+            border-radius: 12px;
+            display: flex;
+            gap: 20px;
+            font-size: 1.2rem;
+            border: 1px solid #333;
+        }
+        .settings label { display: flex; flex-direction: column; gap: 8px; color: #ccc; }
+        .settings input {
+            font-size: 1.5rem;
+            width: 80px;
+            padding: 5px;
+            text-align: center;
+            background: #2a2a2a;
+            color: white;
+            border: 1px solid #444;
+            border-radius: 6px;
+        }
+        .status-warning { color: var(--warning); text-shadow: 0 0 20px rgba(255,152,0,0.4); }
+        .status-danger { color: var(--danger); text-shadow: 0 0 20px rgba(244,67,54,0.6); animation: blink 1s infinite; }
+        @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+    </style>
+</head>
+<body>
+
+    <h1>辯論賽專用計時器</h1>
+    <div class="timer-display" id="display">03:00</div>
+
+    <div class="controls">
+        <button class="btn-start" onclick="startTimer()">開始</button>
+        <button class="btn-pause" onclick="pauseTimer()">暫停</button>
+        <button class="btn-reset" onclick="resetTimer()">重置</button>
+    </div>
+
+    <div class="settings">
+        <label>
+            總時間 (分鐘)
+            <input type="number" id="input-minutes" value="3" min="1" onchange="updateInitialTime()">
+        </label>
+        <label>
+            短鈴提醒 (倒數秒)
+            <input type="number" id="input-warning" value="30" min="0">
+        </label>
+    </div>
+
+    <script>
+        let timerInterval;
+        let totalSeconds = 180; 
+        let remainingSeconds = 180;
+        let isRunning = false;
+        let audioCtx = null;
+
+        const displayEl = document.getElementById('display');
+        const minInput = document.getElementById('input-minutes');
+        const warningInput = document.getElementById('input-warning');
+
+        // Web Audio API 產生蜂鳴聲 (避免需額外引入音檔)
+        function playBeep(type) {
+            if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            const oscillator = audioCtx.createOscillator();
+            const gainNode = audioCtx.createGain();
+            
+            oscillator.connect(gainNode);
+            gainNode.connect(audioCtx.destination);
+            
+            oscillator.type = 'sine';
+            oscillator.frequency.setValueAtTime(800, audioCtx.currentTime); // 音高
+            
+            if (type === 'short') {
+                gainNode.gain.setValueAtTime(1, audioCtx.currentTime);
+                gainNode.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.5);
+                oscillator.start(audioCtx.currentTime);
+                oscillator.stop(audioCtx.currentTime + 0.5);
+            } else if (type === 'long') {
+                gainNode.gain.setValueAtTime(1, audioCtx.currentTime);
+                gainNode.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 1.5);
+                oscillator.start(audioCtx.currentTime);
+                oscillator.stop(audioCtx.currentTime + 1.5);
+                // 播第二次長聲
+                setTimeout(() => playBeep('short_long'), 1600);
+            } else if (type === 'short_long') {
+                gainNode.gain.setValueAtTime(1, audioCtx.currentTime);
+                gainNode.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 1.5);
+                oscillator.start(audioCtx.currentTime);
+                oscillator.stop(audioCtx.currentTime + 1.5);
+            }
+        }
+
+        function updateDisplay() {
+            const m = Math.floor(remainingSeconds / 60).toString().padStart(2, '0');
+            const s = (remainingSeconds % 60).toString().padStart(2, '0');
+            displayEl.textContent = `${m}:${s}`;
+
+            const warningTime = parseInt(warningInput.value);
+            
+            // 處理樣式變化
+            displayEl.classList.remove('status-warning', 'status-danger');
+            if (remainingSeconds === 0) {
+                displayEl.classList.add('status-danger');
+            } else if (remainingSeconds <= warningTime) {
+                displayEl.classList.add('status-warning');
+            }
+        }
+
+        function updateInitialTime() {
+            if (isRunning) return; // 執行中不允許更改
+            const mins = parseInt(minInput.value) || 0;
+            totalSeconds = mins * 60;
+            remainingSeconds = totalSeconds;
+            updateDisplay();
+        }
+
+        function startTimer() {
+            if (isRunning || remainingSeconds <= 0) return;
+            if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)(); // 解除瀏覽器音訊限制
+            isRunning = true;
+            timerInterval = setInterval(() => {
+                remainingSeconds--;
+                updateDisplay();
+
+                const warningTime = parseInt(warningInput.value);
+                
+                // 判斷響鈴時機
+                if (remainingSeconds === warningTime) {
+                    playBeep('short');
+                } else if (remainingSeconds === 0) {
+                    playBeep('long');
+                    clearInterval(timerInterval);
+                    isRunning = false;
+                }
+            }, 1000);
+        }
+
+        function pauseTimer() {
+            clearInterval(timerInterval);
+            isRunning = false;
+        }
+
+        function resetTimer() {
+            clearInterval(timerInterval);
+            isRunning = false;
+            updateInitialTime();
+        }
+
+        // 初始化畫面
+        updateDisplay();
+    </script>
+</body>
+</html>
